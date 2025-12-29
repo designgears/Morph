@@ -1,6 +1,6 @@
 # Morph 🧪
 
-**Morph** is a deep-integrated Linux daemon that makes file extensions honest. If you rename `photo.png` to `photo.webp`, Morph intercepts the event at the kernel level and re-writes the actual file data to match the new extension instantly.
+**Morph** is a Linux daemon that makes file extensions honest. If you rename `photo.png` to `photo.webp`, Morph intercepts the event at the kernel level and re-writes the actual file data to match the new extension instantly.
 
 Built specifically for high-performance Arch-based systems like **CachyOS**, it leverages optimized engines to ensure that renaming a file feels like a native OS feature.
 
