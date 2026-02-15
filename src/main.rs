@@ -12,7 +12,8 @@ use walkdir::WalkDir;
 
 const WATCH_DIR: &str = "/home";
 const LOCK_TTL: Duration = Duration::from_secs(2);
-const DIR_RESTORE_EXT: &str = "dir";
+const PDF_OUTPUT_PAGE_SIZE: &str = "letter";
+const PDF_OUTPUT_PROFILE: &str = "/ebook";
 
 #[derive(Debug, Clone)]
 struct Trigger {
@@ -127,52 +128,29 @@ fn handle_path(path: &Path, locks: &mut HashMap<PathBuf, Instant>) -> Result<()>
         return Ok(());
     };
     let clean_path = path.with_extension(&trigger.target_ext);
-    let lock_path = lock_path_for_trigger(path, &clean_path, &trigger);
 
-    if is_locked(locks, &lock_path) {
+    if is_locked(locks, &clean_path) {
         return Ok(());
     }
-    lock(locks, lock_path);
+    lock(locks, clean_path.clone());
 
     if !path.exists() {
         return Ok(());
     }
 
     let owner = Owner::from_path(path)?;
-    let version_anchor = version_anchor_for_trigger(path, &clean_path, &trigger);
-    let version_dir = version_dir_for_path(&version_anchor, owner.uid)?;
-    ensure_version_paths_owned(&version_dir, owner.uid, owner.gid)?;
 
     if path.is_dir() {
-        return handle_directory_trigger(
-            path,
-            &clean_path,
-            filename,
-            &trigger,
-            &version_dir,
-            owner,
-        );
+        return handle_directory_trigger(path, &clean_path, filename, &trigger, owner);
     }
 
     if !path.is_file() {
         return Ok(());
     }
 
+    let version_dir = version_dir_for_path(&clean_path, owner.uid)?;
+    ensure_version_paths_owned(&version_dir, owner.uid, owner.gid)?;
     handle_file_trigger(path, &clean_path, filename, &trigger, &version_dir, owner)
-}
-
-fn lock_path_for_trigger(path: &Path, clean_path: &Path, trigger: &Trigger) -> PathBuf {
-    if trigger.target_ext == DIR_RESTORE_EXT {
-        return path.with_extension("");
-    }
-    clean_path.to_path_buf()
-}
-
-fn version_anchor_for_trigger(path: &Path, clean_path: &Path, trigger: &Trigger) -> PathBuf {
-    if trigger.target_ext == DIR_RESTORE_EXT {
-        return path.with_extension("pdf");
-    }
-    clean_path.to_path_buf()
 }
 
 fn handle_directory_trigger(
@@ -180,25 +158,39 @@ fn handle_directory_trigger(
     clean_path: &Path,
     filename: &str,
     trigger: &Trigger,
-    version_dir: &Path,
     owner: Owner,
 ) -> Result<()> {
     if trigger.target_ext != "pdf" {
         return Ok(());
     }
 
-    if !trigger.destructive {
-        store_directory_version(path, version_dir, owner.uid, owner.gid)?;
-    }
-
-    if let Some(existing) = find_latest_version_by_ext(version_dir, &trigger.target_ext) {
-        restore_version_file(&existing, clean_path, owner, None)?;
-        let _ = fs::remove_dir_all(path);
-        notify_restore(owner.uid, filename, &trigger.target_ext);
-        return Ok(());
+    let original_dir = path.with_extension("");
+    if original_dir.exists() {
+        return Err(anyhow!(
+            "cannot rename source folder back, path exists: {}",
+            original_dir.display()
+        ));
     }
 
     handle_folder_to_pdf(path, clean_path)?;
+    fs::rename(path, &original_dir).with_context(|| {
+        format!(
+            "failed to rename source folder {} -> {}",
+            path.display(),
+            original_dir.display()
+        )
+    })?;
+    notify_owner(
+        owner.uid,
+        &format!(
+            "Created {} and restored source folder name for {}",
+            clean_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("output.pdf"),
+            filename
+        ),
+    );
     Ok(())
 }
 
@@ -212,34 +204,6 @@ fn handle_file_trigger(
 ) -> Result<()> {
     let mime = detect_mime(path)?;
     let source_ext = detect_source_ext(path);
-
-    if trigger.target_ext == DIR_RESTORE_EXT {
-        if !trigger.destructive {
-            store_version(path, version_dir, &source_ext, owner.uid, owner.gid)?;
-        }
-        let pdf_anchor = path.with_extension("pdf");
-        if restore_directory_version(version_dir, &pdf_anchor, owner)? {
-            let _ = fs::remove_file(path);
-            notify_owner(
-                owner.uid,
-                &format!("Restored original directory for {}", filename),
-            );
-        } else {
-            // No archive available; put the file back to its canonical PDF name.
-            fs::rename(path, &pdf_anchor).with_context(|| {
-                format!(
-                    "failed to revert {} back to {}",
-                    path.display(),
-                    pdf_anchor.display()
-                )
-            })?;
-            notify_owner(
-                owner.uid,
-                &format!("No directory snapshot found for {}", filename),
-            );
-        }
-        return Ok(());
-    }
 
     if !is_valid_target(&mime, &trigger.target_ext) {
         return Ok(());
@@ -318,77 +282,115 @@ fn restore_version_file(
 
 fn handle_folder_to_pdf(input_dir: &Path, output_pdf: &Path) -> Result<()> {
     let owner = Owner::from_path(input_dir)?;
+    let workspace = create_pdf_workspace(input_dir, owner.uid, owner.gid)?;
+    let temp_dir = workspace.join("pages");
+    let final_tmp = workspace.join("merged.pdf");
+    let normalized_tmp = workspace.join("normalized.pdf");
 
-    let base = input_dir.with_extension("");
-    let temp_dir = PathBuf::from(format!("{}.morph_tmp_pdfs", base.display()));
-    let final_tmp = PathBuf::from(format!("{}.morph_tmp.pdf", base.display()));
-    fs::create_dir_all(&temp_dir)?;
-    owner.chown(&temp_dir)?;
+    let result = (|| -> Result<()> {
+        fs::create_dir_all(&temp_dir)?;
+        owner.chown(&temp_dir)?;
 
-    let files = gather_folder_inputs(input_dir);
-    if files.is_empty() {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Ok(());
-    }
-
-    notify_owner(
-        owner.uid,
-        &format!("Creating PDF from {} files", files.len()),
-    );
-
-    for (idx, file) in files.iter().enumerate() {
-        let page = temp_dir.join(format!("{:04}.pdf", idx + 1));
-        let mime = detect_mime(file).unwrap_or_default();
-        let src_ext = detect_source_ext(file);
-        if mime == "application/pdf" {
-            fs::copy(file, &page)?;
-            owner.chown(&page)?;
-        } else if mime.starts_with("image/") {
-            run_cmd(Command::new("magick").arg(file).arg(&page))?;
-            owner.chown(&page)?;
-        } else {
-            let from = pandoc_from_ext(&src_ext);
-            run_cmd(
-                Command::new("pandoc")
-                    .arg("-f")
-                    .arg(from)
-                    .arg(file)
-                    .arg("-s")
-                    .arg("--pdf-engine=xelatex")
-                    .arg("-o")
-                    .arg(&page),
-            )?;
-            owner.chown(&page)?;
+        let files = gather_folder_inputs(input_dir);
+        if files.is_empty() {
+            return Ok(());
         }
-    }
 
-    let mut pdf_pages: Vec<PathBuf> = WalkDir::new(&temp_dir)
-        .max_depth(1)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .map(|e| e.into_path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("pdf"))
-        .collect();
-    pdf_pages.sort();
+        notify_owner(
+            owner.uid,
+            &format!("Creating PDF from {} files", files.len()),
+        );
 
-    if pdf_pages.is_empty() {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Ok(());
-    }
+        for (idx, file) in files.iter().enumerate() {
+            let page = temp_dir.join(format!("{:04}.pdf", idx + 1));
+            let mime = detect_mime(file).unwrap_or_default();
+            let src_ext = detect_source_ext(file);
+            if mime == "application/pdf" {
+                fs::copy(file, &page)?;
+                owner.chown(&page)?;
+            } else if mime.starts_with("image/") {
+                run_cmd(Command::new("magick").arg(file).arg(&page))?;
+                owner.chown(&page)?;
+            } else {
+                let from = pandoc_from_ext(&src_ext);
+                run_cmd(
+                    Command::new("pandoc")
+                        .arg("-f")
+                        .arg(from)
+                        .arg(file)
+                        .arg("-s")
+                        .arg("--pdf-engine=xelatex")
+                        .arg("-o")
+                        .arg(&page),
+                )?;
+                owner.chown(&page)?;
+            }
+        }
 
-    let mut cmd = Command::new("pdfunite");
-    for page in &pdf_pages {
-        cmd.arg(page);
-    }
-    cmd.arg(&final_tmp);
-    run_cmd(&mut cmd)?;
+        let mut pdf_pages: Vec<PathBuf> = WalkDir::new(&temp_dir)
+            .max_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .map(|e| e.into_path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("pdf"))
+            .collect();
+        pdf_pages.sort();
 
-    chown_path(&final_tmp, owner.uid, owner.gid)?;
-    fs::set_permissions(&final_tmp, fs::Permissions::from_mode(0o644))?;
-    let _ = fs::remove_dir_all(input_dir);
-    fs::rename(&final_tmp, output_pdf)?;
-    let _ = fs::remove_dir_all(&temp_dir);
-    Ok(())
+        if pdf_pages.is_empty() {
+            return Ok(());
+        }
+
+        let mut cmd = Command::new("pdfunite");
+        for page in &pdf_pages {
+            cmd.arg(page);
+        }
+        cmd.arg(&final_tmp);
+        run_cmd(&mut cmd)?;
+
+        normalize_and_compress_pdf(&final_tmp, &normalized_tmp)?;
+        chown_path(&normalized_tmp, owner.uid, owner.gid)?;
+        fs::set_permissions(&normalized_tmp, fs::Permissions::from_mode(0o644))?;
+        fs::rename(&normalized_tmp, output_pdf)?;
+        Ok(())
+    })();
+
+    let _ = fs::remove_dir_all(&workspace);
+    result
+}
+
+fn normalize_and_compress_pdf(input_pdf: &Path, output_pdf: &Path) -> Result<()> {
+    let mut cmd = Command::new("gs");
+    cmd.arg("-sDEVICE=pdfwrite")
+        .arg("-dCompatibilityLevel=1.6")
+        .arg(format!("-dPDFSETTINGS={}", PDF_OUTPUT_PROFILE))
+        .arg("-dAutoRotatePages=/None")
+        .arg("-dDetectDuplicateImages=true")
+        .arg("-dCompressFonts=true")
+        .arg("-dSubsetFonts=true")
+        .arg("-dNOPAUSE")
+        .arg("-dQUIET")
+        .arg("-dBATCH")
+        .arg("-dFIXEDMEDIA")
+        .arg("-dPDFFitPage")
+        .arg(format!("-sPAPERSIZE={}", PDF_OUTPUT_PAGE_SIZE))
+        .arg(format!("-sOutputFile={}", output_pdf.display()))
+        .arg(input_pdf);
+    run_cmd(&mut cmd)
+}
+
+fn create_pdf_workspace(input_dir: &Path, uid: u32, gid: u32) -> Result<PathBuf> {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("clock error")?
+        .as_nanos();
+    let pid = std::process::id();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(input_dir.as_os_str().as_bytes());
+    let tag = hasher.finalize().to_hex();
+    let path = std::env::temp_dir().join(format!("morph-bang-pdf-{pid}-{ts}-{}", &tag[..12]));
+    fs::create_dir_all(&path)?;
+    chown_path(&path, uid, gid)?;
+    Ok(path)
 }
 
 fn gather_folder_inputs(dir: &Path) -> Vec<PathBuf> {
@@ -932,60 +934,6 @@ fn store_version(
     Ok(())
 }
 
-fn store_directory_version(
-    source_dir: &Path,
-    version_dir: &Path,
-    uid: u32,
-    gid: u32,
-) -> Result<()> {
-    let version_file = next_version_path(version_dir, "dir.tar")?;
-
-    run_cmd(
-        Command::new("tar")
-            .arg("-C")
-            .arg(source_dir)
-            .arg("-cf")
-            .arg(&version_file)
-            .arg("."),
-    )?;
-    chown_path(&version_file, uid, gid)?;
-    Ok(())
-}
-
-fn restore_directory_version(version_dir: &Path, pdf_path: &Path, owner: Owner) -> Result<bool> {
-    let Some(archive) = find_latest_directory_archive(version_dir) else {
-        return Ok(false);
-    };
-
-    let restore_dir = pdf_path.with_extension("");
-    if restore_dir.exists() {
-        return Err(anyhow!(
-            "cannot restore directory, path already exists: {}",
-            restore_dir.display()
-        ));
-    }
-
-    fs::create_dir_all(&restore_dir).with_context(|| {
-        format!(
-            "failed to create restore directory {}",
-            restore_dir.display()
-        )
-    })?;
-
-    if let Err(err) = run_cmd(
-        Command::new("tar")
-            .arg("-xf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(&restore_dir),
-    ) {
-        let _ = fs::remove_dir_all(&restore_dir);
-        return Err(err);
-    }
-    chown_tree(&restore_dir, owner.uid, owner.gid)?;
-    Ok(true)
-}
-
 fn next_version_path(version_dir: &Path, ext: &str) -> Result<PathBuf> {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1035,37 +983,6 @@ fn chown_path(path: &Path, uid: u32, gid: u32) -> Result<()> {
     chown(path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
         .with_context(|| format!("failed to set ownership on {}", path.display()))?;
     Ok(())
-}
-
-fn chown_tree(root: &Path, uid: u32, gid: u32) -> Result<()> {
-    if !root.exists() {
-        return Ok(());
-    }
-    chown_path(root, uid, gid)?;
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        let p = entry.path();
-        if p != root {
-            chown_path(p, uid, gid)?;
-        }
-    }
-    Ok(())
-}
-
-fn find_latest_directory_archive(version_dir: &Path) -> Option<PathBuf> {
-    let mut matches: Vec<PathBuf> = fs::read_dir(version_dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_file())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.ends_with(".dir.tar"))
-                .unwrap_or(false)
-        })
-        .collect();
-    matches.sort();
-    matches.pop()
 }
 
 fn find_latest_version_by_ext(version_dir: &Path, target_ext: &str) -> Option<PathBuf> {

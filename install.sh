@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "Installing Morph Bang Dependencies..."
-sudo pacman -S --needed rustup inotify-tools libvips imagemagick pandoc ffmpeg libnotify texlive-bin texlive-xetex poppler
+sudo pacman -S --needed rustup inotify-tools libvips imagemagick pandoc ffmpeg libnotify texlive-bin texlive-xetex poppler ghostscript
 
 echo "Setting up Rust toolchain..."
 rustup toolchain install stable --profile minimal
