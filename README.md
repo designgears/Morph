@@ -1,97 +1,95 @@
 # Morph Bang 🧪💥
 
-**Morph** is a Linux daemon that makes file extensions honest. If you rename `photo.png` to `photo.webp`, Morph intercepts the event at the kernel level and re-writes the actual file data to match the new extension instantly.
+**Morph Bang** is a Linux daemon that makes file extensions honest on demand.
+Rename a file or folder to `.!<ext>` (example: `photo.!webp`), and Morph Bang converts the underlying data to that format, then removes the `!` automatically.
 
-Built specifically for Arch-based systems, it leverages optimized engines to ensure that renaming a file feels like a native OS feature.
+## How It Works
 
-## ✨ Features
+1. Rename a file or folder to a bang extension:
+   - `image.png` -> `image.!jpg`
+   - `video.mkv` -> `video.!mp4`
+   - `notes.md` -> `notes.!pdf`
+   - `album/` -> `album.!pdf`
+2. Morph Bang detects the rename.
+3. It converts to the requested target format.
+4. It writes the final output without the bang:
+   - `image.jpg`
+   - `video.mp4`
+   - `notes.pdf`
+   - `album.pdf`
 
-- **Universal Conversion:** Handles Images, Documents, Video, and Audio.
-- **Intelligent Media Swapping:** Uses FFmpeg "Remuxing" (Stream Copying) to change video containers (`.mkv` to `.mp4`) in milliseconds with zero quality loss.
-- **PDF ↔ Images:** Multi-page PDF extraction and folder-to-PDF compilation.
-- **Deep Document Processing:** Powered by Pandoc (with XeLaTeX support) to morph `.md` to `.pdf`, `.docx`, or `.html`.
-- **System-Wide:** Works in the Terminal, Dolphin (KDE), Thunar, or any application.
-- **Safety First:**
-  - Prevents infinite loops via hash-based locking.
-  - Detects and ignores browser temporary/part files.
-  - Preserves original file ownership and permissions (no "root-owned" files).
+Only names with `.!<ext>` are tracked for conversion.
 
-## 🔄 Special Conversions
+## Features
 
-### PDF → Images
-Rename a PDF to an image extension to extract all pages:
+- On-demand conversion trigger via `.!<ext>`
+- Images, documents, audio, and video conversion
+- Fast media remuxing first, then re-encode fallback
+- PDF special handling
+- Preserves ownership and permissions where possible
+- Loop prevention via lock files
 
-```
-document.pdf  →  document.png
-```
+## Special Cases
 
-**Creates:**
-```
+### Multi-page PDF -> Image Set
+
+Rename a multi-page PDF to an image target:
+
+`document.pdf` -> `document.!png`
+
+Morph Bang will extract pages into a folder named from the file base:
+
+```text
 document/
 ├── 001.png
 ├── 002.png
 ├── 003.png
-└── ... (one per page at 300 DPI)
+└── ...
 ```
 
-### Folder → PDF
-Rename a folder of files to `.pdf` to combine them:
+### Folder -> Single PDF
 
+Rename a folder to `.!pdf`:
+
+`my_folder/` -> `my_folder.!pdf`
+
+Morph Bang converts supported files in natural filename order and merges them into:
+
+`my_folder.pdf`
+
+Supported folder inputs include common images and docs such as:
+- Images: `png`, `jpg`, `jpeg`, `webp`, `tiff`, `tif`, `bmp`, `gif`, `avif`, `heic`, `jxl`
+- Documents: `md`, `txt`, `html`, `htm`, `docx`, `odt`, `epub`, `tex`, `rst`, `rtf`, `org`, `textile`, `ipynb`, `typst`
+
+## Engines
+
+- `libvips` + ImageMagick fallback for image workflows
+- `ffmpeg` for audio/video workflows
+- `pandoc` (+ XeLaTeX) for document workflows
+- `poppler` tools for PDF utilities
+
+## Installation (Arch/CachyOS)
+
+```bash
+chmod +x install.sh
+./install.sh
 ```
-my_folder/  →  my_folder.pdf
-```
 
-**Supports:** Images (PNG, JPG, WebP, TIFF, GIF, AVIF, HEIC, JXL) + Documents (MD, TXT, HTML, DOCX, ODT, EPUB, TEX, RST, RTF, ORG, Textile, IPYNB, Typst)
+This installs:
+- `/usr/local/bin/morph-bang`
+- `morph-bang.service`
 
-Files are combined in natural sort order by filename.
+## Monitoring
 
-## 🚀 Engines
-
-### 1. LibVips (Images)
-High-performance image processor with ImageMagick backend fallback.
-
-| Read & Write | Read-Only (rasterize) | Via ImageMagick |
-|--------------|----------------------|-----------------|
-| PNG, JPEG, WebP, AVIF, HEIC/HEIF, TIFF, GIF, JPEG-XL, JPEG2000, HDR, PPM/PGM/PBM/PFM, FITS | PDF, SVG, OpenEXR | BMP, ICO, PSD, TGA, EPS, DDS, RAW camera (CR2, NEF, ARW, DNG, etc.) |
-
-### 2. FFmpeg (Media)
-Intelligent remuxing (zero quality loss) with fallback to re-encoding.
-
-| Read & Write | Read-Only | Encoding Strategy |
-|--------------|-----------|-------------------|
-| MP4, MKV, MOV, AVI, WebM, FLV, TS, MPG, OGV, 3GP, GIF | APE, AA/AAX (Audible), WMA, RA | Remux first, encode if incompatible |
-| MP3, FLAC, WAV, OGG, M4A, AAC, Opus, AC3, DTS, AIFF, WV | | Audio: quality-based VBR encoding |
-| | | Video: x264/VP9 with CRF quality |
-
-### 3. Pandoc (Documents)
-Full bidirectional document conversion with XeLaTeX PDF support.
-
-| Bidirectional (R/W) | Output Only | Input Only |
-|---------------------|-------------|------------|
-| MD, HTML, DOCX, ODT, EPUB, LaTeX/TeX, RST, RTF, Org, MediaWiki, Textile, FB2, Jupyter, JIRA, OPML, JSON, Typst, Djot, Man | PDF, PPTX, AsciiDoc, Beamer, ICML, TEI, Texinfo | RIS, EndNote XML, TSV, CSV, txt2tags, Creole, TWiki, TikiWiki, VimWiki |
-
-## 🛠️ Installation
-
-1. **Clone the repo:**
-   ```bash
-   git clone https://github.com/designgears/morph.git
-   cd morph
-   ```
-
-2. **Run the installer:**
-   ```bash
-   chmod +x install.sh
-   ./install.sh
-   ```
-
-### Dependencies
-Automatically installed: `inotify-tools`, `libvips`, `imagemagick`, `pandoc`, `ffmpeg`, `poppler`, `libnotify`, `texlive-bin`, `texlive-xetex`
-
-## 📈 Monitoring
-Watch Morph Bang work in real-time:
 ```bash
 journalctl -u morph-bang.service -f
 ```
 
-## ⚖️ License
+## Notes
+
+- Trigger format is `.!<ext>` only.
+- Example: `song.flac` -> `song.!mp3` -> `song.mp3`
+
+## License
+
 MIT
