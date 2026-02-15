@@ -72,7 +72,7 @@ Supported folder inputs include common images and docs such as:
 - `pandoc` (+ XeLaTeX) for document workflows
 - `poppler` tools for PDF utilities
 
-## Installation (Arch/CachyOS)
+## Installation
 
 ```bash
 chmod +x install.sh
@@ -94,7 +94,7 @@ journalctl -u morph-bang.service -f
 - `.!<ext>` (safe): stores original in version history before conversion.
 - `.!!<ext>` (destructive): converts without storing original.
 - If target extension already exists in version history, Morph Bang restores that version instead of reconverting.
-- Version store path (XDG default): `~/.local/share/morph-bang/versions`
+- Version store path: `~/.local/share/morph-bang/versions`
 - Example: `song.flac` -> `song.!mp3` -> `song.mp3`
 
 ## License
