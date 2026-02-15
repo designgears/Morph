@@ -1,6 +1,9 @@
 #!/bin/bash
 echo "Installing Morph Bang Dependencies..."
-sudo pacman -S --needed rust inotify-tools libvips imagemagick pandoc ffmpeg libnotify texlive-bin texlive-xetex poppler
+sudo pacman -S --needed rustup inotify-tools libvips imagemagick pandoc ffmpeg libnotify texlive-bin texlive-xetex poppler
+
+echo "Setting up Rust toolchain..."
+rustup default stable
 
 echo "Configuring Inotify limits..."
 echo "fs.inotify.max_user_watches=524288" | sudo tee /etc/sysctl.d/99-inotify.conf
