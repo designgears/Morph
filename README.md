@@ -2,11 +2,13 @@
 
 **Morph Bang** is a Linux daemon that makes file extensions honest on demand.
 Rename a file or folder to `.!<ext>` (example: `photo.!webp`), and Morph Bang converts the underlying data to that format, then removes the `!` automatically.
+Use `.!!<ext>` to force destructive conversion (skip version backup).
 
 ## How It Works
 
 1. Rename a file or folder to a bang extension:
    - `image.png` -> `image.!jpg`
+   - `image.png` -> `image.!!jpg` (destructive mode)
    - `video.mkv` -> `video.!mp4`
    - `notes.md` -> `notes.!pdf`
    - `album/` -> `album.!pdf`
@@ -18,11 +20,13 @@ Rename a file or folder to `.!<ext>` (example: `photo.!webp`), and Morph Bang co
    - `notes.pdf`
    - `album.pdf`
 
-Only names with `.!<ext>` are tracked for conversion.
+Only names with `.!<ext>` or `.!!<ext>` are tracked.
 
 ## Features
 
 - On-demand conversion trigger via `.!<ext>`
+- Automatic version history in safe mode (`.!<ext>`)
+- Destructive override mode (`.!!<ext>`)
 - Images, documents, audio, and video conversion
 - Fast media remuxing first, then re-encode fallback
 - PDF special handling
@@ -87,7 +91,10 @@ journalctl -u morph-bang.service -f
 
 ## Notes
 
-- Trigger format is `.!<ext>` only.
+- `.!<ext>` (safe): stores original in version history before conversion.
+- `.!!<ext>` (destructive): converts without storing original.
+- If target extension already exists in version history, Morph Bang restores that version instead of reconverting.
+- Version store path (XDG default): `~/.local/share/morph-bang/versions`
 - Example: `song.flac` -> `song.!mp3` -> `song.mp3`
 
 ## License

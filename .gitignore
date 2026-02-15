@@ -1,0 +1,12 @@
+/target/
+Cargo.lock
+
+# Runtime artifacts
+*.log
+*.tmp
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo

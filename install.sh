@@ -1,13 +1,19 @@
 #!/bin/bash
 echo "Installing Morph Bang Dependencies..."
-sudo pacman -S --needed inotify-tools libvips imagemagick pandoc ffmpeg libnotify texlive-bin texlive-xetex poppler
+sudo pacman -S --needed rust inotify-tools libvips imagemagick pandoc ffmpeg libnotify texlive-bin texlive-xetex poppler
 
 echo "Configuring Inotify limits..."
 echo "fs.inotify.max_user_watches=524288" | sudo tee /etc/sysctl.d/99-inotify.conf
 sudo sysctl --system
 
-echo "Setting up script..."
-sudo cp morph /usr/local/bin/morph-bang
+echo "Building morph-bang..."
+cargo build --release
+
+echo "Stopping service before binary update..."
+sudo systemctl stop morph-bang.service 2>/dev/null || true
+
+echo "Installing binary..."
+sudo cp target/release/morph-bang /usr/local/bin/morph-bang
 sudo chmod +x /usr/local/bin/morph-bang
 
 echo "Creating Systemd service..."
@@ -18,7 +24,7 @@ After=network.target
 
 [Service]
 User=root
-ExecStart=/bin/bash /usr/local/bin/morph-bang
+ExecStart=/usr/local/bin/morph-bang
 Restart=always
 Nice=-15
 IOSchedulingClass=realtime

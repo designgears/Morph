@@ -1,0 +1,9 @@
+[package]
+name = "morph-bang"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+nix = { version = "0.29", features = ["fs", "user"] }
+walkdir = "2"
